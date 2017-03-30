@@ -1,9 +1,4 @@
-"""
-Facebook OAuth support.
-
-This contribution adds support for Facebook OAuth service. The settings
-FACEBOOK_APP_ID and FACEBOOK_API_SECRET must be defined with the values
-given by Facebook application registration process.
+from django.conf import settings
 
 Extended permissions are supported by defining FACEBOOK_EXTENDED_PERMISSIONS
 setting, it must be a list of values to request.
@@ -20,37 +15,19 @@ from urllib import urlencode
 from urllib2 import HTTPError
 import json
 
-try:
-    import json as simplejson
-except ImportError:
-    try:
-        import simplejson
-    except ImportError:
-        from django.utils import simplejson
-
-from django.contrib.auth import authenticate
-from django.http import HttpResponse
-from django.template import TemplateDoesNotExist, RequestContext, loader
-
-from social_auth.backends import BaseOAuth2, OAuthBackend
-from social_auth.utils import sanitize_log_data, backend_setting, setting,\
-    log, dsa_urlopen
-from social_auth.exceptions import AuthException, AuthCanceled, AuthFailed,\
-    AuthTokenError, AuthUnknownError
+if getattr(settings, 'FACEBOOK_APP_AUTH', False):
+    from social.backends.facebook import \
+            FacebookAppOAuth2 as FacebookBackendBase
+else:
+    from social.backends.facebook import FacebookOAuth2 as FacebookBackendBase
 
 
-# Facebook configuration
-FACEBOOK_ME = 'https://graph.facebook.com/me?'
-ACCESS_TOKEN = 'https://graph.facebook.com/oauth/access_token?'
-USE_APP_AUTH = setting('FACEBOOK_APP_AUTH', False)
-LOCAL_HTML = setting('FACEBOOK_LOCAL_HTML', 'facebook.html')
-APP_NAMESPACE = setting('FACEBOOK_APP_NAMESPACE', None)
 REDIRECT_HTML = """
 <script type="text/javascript">
     var domain = 'https://apps.facebook.com/',
         redirectURI = domain + '{{ FACEBOOK_APP_NAMESPACE }}' + '/';
     window.top.location = 'https://www.facebook.com/dialog/oauth/' +
-    '?client_id={{ FACEBOOK_APP_ID }}' +
+    '?client_id={{ FACEBOOK_KEY }}' +
     '&redirect_uri=' + encodeURIComponent(redirectURI) +
     '&scope={{ FACEBOOK_EXTENDED_PERMISSIONS }}';
 </script>
@@ -293,26 +270,17 @@ class FacebookAppAuth(FacebookAuth):
         return True
 
     def auth_html(self):
-        app_id = backend_setting(self, self.SETTINGS_KEY_NAME)
+        key, secret = self.get_key_and_secret()
+        namespace = self.setting('NAMESPACE', None)
+        scope = self.get_scope()
+        if scope:
+            scope = self.SCOPE_SEPARATOR.join(scope)
         ctx = {
-            'FACEBOOK_APP_ID': app_id,
-            'FACEBOOK_EXTENDED_PERMISSIONS': ','.join(
-                backend_setting(self, self.SCOPE_VAR_NAME)
-            ),
+            'FACEBOOK_APP_NAMESPACE': namespace or key,
+            'FACEBOOK_KEY': key,
+            'FACEBOOK_EXTENDED_PERMISSIONS': scope,
             'FACEBOOK_COMPLETE_URI': self.redirect_uri,
-            'FACEBOOK_APP_NAMESPACE': APP_NAMESPACE or app_id
         }
-
-        try:
-            fb_template = loader.get_template(LOCAL_HTML)
-        except TemplateDoesNotExist:
-            fb_template = loader.get_template_from_string(REDIRECT_HTML)
-        context = RequestContext(self.request, ctx)
-
-        return fb_template.render(context)
-
-
-# Backend definition
-BACKENDS = {
-    'facebook': FacebookAppAuth if USE_APP_AUTH else FacebookAuth,
-}
+        tpl = self.setting('LOCAL_HTML', 'facebook.html')
+        return self.strategy.render_html(tpl=tpl, html=REDIRECT_HTML,
+                                         context=ctx)
